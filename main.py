@@ -2,7 +2,7 @@ from datetime import timedelta
 from flask import Flask, jsonify, request
 from flask_sqlalchemy import SQLAlchemy
 from flask_jwt_extended import (
-    JWTManager, create_access_token, jwt_required,
+    JWTManager, create_access_token, decode_token, jwt_required,
     get_jwt_identity, get_jwt
 )
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -83,7 +83,8 @@ def login():
 
     # Создаем JWT токен и заносим его в белый список
     access_token = create_access_token(identity=username)
-    jti = get_jwt()['jti']
+    decoded_token = decode_token(access_token)
+    jti = decoded_token['jti']
     expires_in = app.config['JWT_ACCESS_TOKEN_EXPIRES']
     rds.setex(f'jwt_whitelist:{jti}', expires_in, 'true')
 
