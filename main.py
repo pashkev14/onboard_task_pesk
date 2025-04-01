@@ -3,7 +3,7 @@ from flask import Flask, jsonify, request
 from flask_sqlalchemy import SQLAlchemy
 from flask_jwt_extended import (
     JWTManager, create_access_token, decode_token, jwt_required,
-    get_jwt_identity, get_jwt
+    get_jwt_identity, get_jwt, set_access_cookies, unset_jwt_cookies
 )
 from flask.logging import default_handler
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -18,8 +18,8 @@ ACCESS_EXPIRES = timedelta(minutes=15) # здесь указываем срок 
 app = Flask(__name__)
 
 # Настройка SQLite базы с данными пользователей
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///users.db'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///users.db' # путь к базе с пользователями
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False # отключаем отслеживание операций изменения моделей
 db = SQLAlchemy(app)
 
 
@@ -40,7 +40,8 @@ with app.app_context():
 
 # Настройка JWT
 app.config['JWT_TOKEN_LOCATION'] = ['cookies']  # храним в куках
-app.config["JWT_COOKIE_SECURE"] = True  # передаем данные только по HTTPS
+app.config["JWT_COOKIE_SECURE"] = False  # передаем данные только по HTTPS
+# для теста ставим False, потому что соединение по HTTP
 app.config["JWT_COOKIE_HTTPONLY"] = True  # используем только HttpOnly куки
 app.config['JWT_SECRET_KEY'] = 'very-secret-key' # мок ключ, в проде его использовать чревато
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = ACCESS_EXPIRES
@@ -89,11 +90,14 @@ def check_device():
         current_device_id = hashlib.sha256(f'{current_ip}-{user_agent}'.encode()).hexdigest()
         token_device_id = get_jwt().get('device_id')
         if token_device_id != current_device_id:
-            # Проверка провалена - принудительно отзываем токен заносом в черный список
+            # Проверка провалена - принудительно отзываем токен
             jti = get_jwt()['jti']
             expires_in = app.config['JWT_ACCESS_TOKEN_EXPIRES']
             rds.setex(f'jwt_blacklist:{jti}', expires_in, 'true')
-            return jsonify({'msg': 'Suspicious activity detected!'}), 401
+
+            response = jsonify({'msg': 'Suspicious activity detected!'})
+            unset_jwt_cookies(response)
+            return response, 401
 
 
 @app.route('/register', methods=['POST'])
@@ -140,17 +144,23 @@ def login():
     expires_in = app.config['JWT_ACCESS_TOKEN_EXPIRES']
     rds.setex(f'jwt_whitelist:{jti}', expires_in, 'true')
 
-    return jsonify(access_token=access_token)
+    # Формируем ответ, добавляем токен в куки, возвращаем ответ
+    response = jsonify({'msg': 'Successfully logged in'})
+    set_access_cookies(response, access_token)
+    return response
 
 
 @app.route('/logout', methods=['DELETE'])
-@jwt_required()
 def logout():
     # Логаут - один из кейсов отзыва токена - заносим токен в черный список
     jti = get_jwt()['jti']
     expires_in = app.config['JWT_ACCESS_TOKEN_EXPIRES']
     rds.setex(f'jwt_blacklist:{jti}', expires_in, 'true')
-    return jsonify({'msg': 'Successfully logged out'})
+
+    # Формируем ответ, удаляем куки с токеном, возвращаем ответ
+    response = jsonify({'msg': 'Successfully logged out'})
+    unset_jwt_cookies(response)
+    return response
 
 
 # Пример доступа к защищенному эндпоинту
@@ -162,28 +172,28 @@ def whoami():
 
 
 # Пример общего для обеих ролей контента
-@app.route("/common-content")
+@app.route('/common-content')
 @jwt_required()
 def common_content():
-    return jsonify({"data": "Общий контент для всех ролей"})
+    return jsonify({'data': 'Общий контент для всех ролей'})
 
 
 # Пример контента только для role1
-@app.route("/role1-content")
+@app.route('/role1-content')
 @jwt_required()
 def role1_content():
-    if get_jwt().get("role") != "role1":
-        return jsonify({"msg": "Forbidden"}), 403
-    return jsonify({"data": "Секретный контент role1"})
+    if get_jwt().get('role') != 'role1':
+        return jsonify({'msg': 'Forbidden'}), 403
+    return jsonify({'data': 'Секретный контент role1'})
 
 
 # Пример контента только для role2
-@app.route("/role2-content")
+@app.route('/role2-content')
 @jwt_required()
 def role2_content():
-    if get_jwt().get("role") != "role2":
-        return jsonify({"msg": "Forbidden"}), 403
-    return jsonify({"data": "Секретный контент role2"})
+    if get_jwt().get('role') != 'role2':
+        return jsonify({'msg': 'Forbidden'}), 403
+    return jsonify({'data': 'Секретный контент role2'})
 
 
 if __name__ == '__main__':
